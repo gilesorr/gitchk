@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+#
+#   Filename:      gitchk
+#   Created:       2024-11-12
+#   Purpose:       Re-implementing `gitcheck` in Bash.
+#
+# Write clean code:
+set -o errexit
+set -o noclobber
+set -o nounset
+set -o pipefail
+
+###############################################################################
+#                    Variables
+###############################################################################
+
+EXENAME="$(basename "${0}")"
+# Configuration File:
+CONF=~/.${EXENAME}.conf
+LIB="$(dirname "${0}")/${EXENAME}lib"
+# if the config file is more than this many days old, type a complaint:
+# shellcheck disable=SC2034  # ... appears unused. Verify use (or export ...
+CONFDAYS=30
+
+# shellcheck disable=SC1090  # can't follow non-constant source. Use a directive to specify location.
+source "${LIB}"
+
+# User colour assignment (has to be done after the library is sourced as
+# the colour definitions are in that file):
+CHANGES="${RED}"
+HIGHLIGHT1="${PURPLE}"
+
+###############################################################################
+#                    Functions
+###############################################################################
+
+usage () {
+    cat << EOF
+Usage: $(basename "${0}") [-h] [[-x] [-n|-N] <folder>] [-f <file>] [-C|-c] [-t]
+    Check a set of local directories for git repositories and their status.
+
+    '-c' check repos
+    '-C' check repos, with remote fetch first
+    '-f <file>' provide an alternative configuration file
+         (default: "${CONF}")
+    '-n <folder>' search for repos starting at <folder> and print a new
+         config file on stdout
+    '-N <folder>' compare existing config against a new search of <folder>,
+         showing the differing results
+    '-t' test all dirs in the config
+    '-x' don't cross filesystems while looking for repos (applies to config
+         file search and creation)
+    '-h' for help
+EOF
+}
+
+tagExplanation() {
+    # Show the user an explanation of the various tags that are used to
+    # mark up the displayed repos.  Accepts two possible terms: "top" or
+    # bottom, which governs the placement of the dashed line.
+    if [ "${1}" = "bottom" ]
+    then
+        echo "---------------------------------------------------------------------"
+    fi
+    echo -n "local ${HIGHLIGHT1}l:${NOCOLOUR} "
+    echo "${CHANGES}+n-m${NOCOLOUR} - n added lines, m removed lines"
+    # All on one line:
+    echo -n "remote ${HIGHLIGHT1}r:${NOCOLOUR} "
+    echo -n "${CHANGES}^${NOCOLOUR} ahead "
+    echo -n "${CHANGES}v${NOCOLOUR} behind "
+    echo -n "${CHANGES}^v${NOCOLOUR} diverged "
+    echo -n "${CHANGES}+${NOCOLOUR} untracked "
+    echo -n "${CHANGES}_${NOCOLOUR} staged "
+    echo -n "${CHANGES}S${NOCOLOUR} stashed "
+    echo
+    if [ "${1}" = "top" ]
+    then
+        echo "---------------------------------------------------------------------"
+    fi
+}
+
+
+###############################################################################
+#                    Main
+###############################################################################
+
+if [ $# -lt 1 ]
+then
+    usage
+    exit 1
+fi
+
+#echo "DEBUG: repos is '${!repos[*]}'"
+
+FETCH="false"
+DONTCROSSFS="false"
+CHECK="false"
+GENNEWCONF="false"
+COMPARECONF="false"
+TESTCONF="false"
+
+while getopts :hcCf:n:N:tx opt ; do
+    case ${opt} in
+        h)  usage
+            exit 0
+            ;;
+        c)
+            # check your list of repos for stuff that's out of date.
+            FETCH="false"
+            CHECK="true"
+            ;;
+        C)
+            # check your list of repos for stuff that's out of date.
+            # Unlike the above, this also does a remote fetch.
+            # shellcheck disable=SC2034  # ... appears unused. Verify use (or export ...
+            FETCH="true"
+            CHECK="true"
+            ;;
+        f)
+            if [ -f "${OPTARG}" ]
+            then
+                CONF="${OPTARG}"
+            else
+                echo "'${OPTARG}' doesn't appear to be a valid file, not setting it as the configuration file."
+            fi
+            ;;
+        n)
+            # search the named folder for git repositories and generate
+            # a new config file
+            if [ -d "${OPTARG}" ]
+            then
+                GENNEWCONF="true"
+                searchFolderNew="${OPTARG}"
+            else
+                echo "'${OPTARG}' doesn't appear to be a valid directory, not attempting to regenerate configuration."
+            fi
+            ;;
+        N)
+            # search the named folder for git repositories and
+            # compare this to our existing list of repos
+            if [ -d "${OPTARG}" ]
+            then
+                COMPARECONF="true"
+                searchFolder="${OPTARG}"
+            else
+                echo "'${OPTARG}' doesn't appear to be a valid directory, not attempting to test configuration against it."
+            fi
+            ;;
+        t)
+            # test all known repositories in config
+            # NOTE: this will probably be incorporated into the repo
+            # search, but for now ...
+            TESTCONF="true"
+            ;;
+        x)
+            # don't cross filesystems while searching for git repos.
+            # shellcheck disable=SC2034  # ... appears unused. Verify use (or export ...
+            DONTCROSSFS="true"
+            ;;
+
+        :)  echo "Option -${OPTARG} requires an argument." >&2
+            usage
+            exit 1
+            ;;
+        *)  echo "unknown option ... "
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+# shellcheck disable=SC1090  # Not following: <file> was not specified as input
+source "${CONF}"
+
+if ${CHECK}
+then
+    checkConfigAge
+    checkRepos
+fi
+
+if ${GENNEWCONF}
+then
+    generateNewConfig "${searchFolderNew}"
+fi
+
+if ${COMPARECONF}
+then
+    checkConfigContents "${searchFolder}"
+fi
+
+if ${TESTCONF}
+then
+    confirmRepos
+fi
+

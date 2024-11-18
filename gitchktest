@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+#
+#   Filename:      gitchktest
+#   Created:       2024-11-17
+#   Purpose:       Test functions in the `gitchklib` library.
+
+###############################################################################
+#                    Tests
+###############################################################################
+
+testDirs() {
+    for dir in ~/.bashprompt ~/.gcb.conf ~/Documents
+    do
+        echo -n "DEBUG: "
+        bool="$(isGitDir "${dir}")"
+        echo "Is '${dir}' a git repo? ${bool}"
+    done
+}
+
+testColours() {
+    # test the colour variables:
+    echo -n "${WHITE}WHITE${NOCOLOUR} "
+    echo -n "${RED}RED${NOCOLOUR} "
+    echo -n "${YELLOW}YELLOW${NOCOLOUR} "
+    echo -n "${GREEN}GREEN${NOCOLOUR} "
+    echo -n "${PURPLE}PURPLE${NOCOLOUR} "
+    echo -n "${CYAN}CYAN${NOCOLOUR} "
+    echo "NOCOLOUR"
+}
+
+testGitBranchName() {
+    for dir in /home/giles/.bashprompt/ /home/giles/bin/ /home/giles/nonexistent/
+    do
+        echo "branch in '${dir}' branch is '$(gitBranchName "${dir}")'"
+    done
+}
+
+testStatus() {
+    # test the status of the test repositories.
+    # we don't have to cd to the dir, but it makes display of output a lot
+    # shorter/cleaner.
+    if ! cd "${tmpdir}"
+    then
+        echo "unable to 'cd' to '${tmpdir}' in testStatus(), failing."
+        exit 1
+    fi
+
+    # show the status of each of the directories:
+    for dir in testrepos/*
+    do
+        if [ -d "${dir}" ]
+        then
+            echo "${GREEN}${dir}:${NOCOLOUR}"
+            echo "gitLocalStatus: ${RED}$(gitLocalStatus "${dir}")${NOCOLOUR}"
+            echo "gitRemoteStatus: ${RED}$(gitRemoteStatus "${dir}")${NOCOLOUR}"
+        fi
+    done
+}
+
+testSearchForGitDirs() {
+    searchForGitDirs "${tmpdir}"
+}
+
+testGenerateNewConfig() {
+    generateNewConfig "${tmpdir}"
+}
+
+
+###############################################################################
+#                    Setup
+###############################################################################
+#
+# Several of these tests assume there's a folder called $tmpdir/testrepos/,
+# and in it several repos in different states (although they're all clones
+# of one original).  Setup creates this case.
+
+EXENAME="$(basename "${0}")"
+SRCDIR="$(realpath "$(dirname "${0}")")"
+# Bundle of repositories in various states for testing:
+REPOTARBALL="${SRCDIR}/testrepos.tar.gz"
+LIB="$(dirname "${0}")/${EXENAME%test}lib"
+# shellcheck disable=SC1090  # can't follow non-constant source. Use a directive to specify location.
+source "${LIB}"
+tmpdir=$(mktemp -d "/tmp/$(basename "${0}")_XXXXXXXX") || exit 2
+if ! cd "${tmpdir}"
+then
+    echo "unable to 'cd' to '${tmpdir}' in testStatus(), failing."
+    exit 1
+fi
+
+# unpack our test directories
+tar xvfz "${REPOTARBALL}" > /dev/null
+
+
+###############################################################################
+#                    Run the Tests
+###############################################################################
+
+for func in testDirs testColours testGitBranchName testStatus testSearchForGitDirs testGenerateNewConfig
+do
+    echo "${RED}=========== running '${func}':${NOCOLOUR}"
+    ${func}
+done
+
+
+###############################################################################
+#                    Teardown
+###############################################################################
+
+rm -rf "${tmpdir}"
+

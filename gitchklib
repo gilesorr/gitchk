@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2034  # ... appears unused. Verify use (or export ...
+#
+#   Filename:      gitchklib
+#   Created:       2024-11-17
+#   Purpose:       Library of functions for `gitchk`
+#
+#   FIX:
+#   - $FETCH is treated as a global var across `gitchk` and `gitchklib`.
+#     It should be passed.
+
+###############################################################################
+#                    Variables
+###############################################################################
+
+# Colours:
+RED="$(echo -en "\e[1;31m")"
+YELLOW="$(echo -en "\e[1;33m")"
+GREEN="$(echo -en "\e[1;32m")"
+PURPLE="$(echo -en "\e[1;35m")"
+CYAN="$(echo -en "\e[1;36m")"
+WHITE="$(echo -en "\e[1;37m")"
+NOCOLOUR="$(echo -en "\e[0;0m")"
+
+###############################################################################
+#                    Functions
+###############################################################################
+
+gitBranchName() {
+    # show the branch name of the git repo passed as $1
+    if ! cd "${1}" 2> /dev/null
+    then
+        echo "'${1}' is not a valid directory [gitBranchName()]" > /dev/stderr
+    else
+        branch_name=$(command git branch --no-color 2> /dev/null | command sed -e '/^[^*]/d' -e "s/* \(.*\)/\1/")
+        #echo "DEBUG: in gitBranchName() pwd ${PWD} with branch_name = '${branch_name}'"
+        if [ -n "${branch_name}" ]
+        then
+            echo -n "${branch_name}"
+        fi
+    fi
+}
+
+gitRemoteStatus() {
+    # Show the remote status of the git repo passed as $1
+    if ! cd "${1}" 2> /dev/null
+    then
+        echo "'${1}' is not a valid directory [gitRemoteStatus()]" > /dev/stderr
+    else
+        if ! git diff > /dev/null 2> /dev/null
+        then
+            return 0
+        fi
+
+        command git diff --no-ext-diff --quiet --exit-code &>/dev/null
+        if (( $? == 128 )) && [ -r "${PWD}" ]
+        then
+            echo -n "(bare)"
+        fi
+
+        status="$(command git status 2> /dev/null)"
+        upstream="$(echo "${status}" | command grep 'Your branch')"
+        if [ -n "${upstream}" ]
+        then
+            # we appear to have an origin
+
+            git_ahead=$(   echo "${upstream}" | command grep "ahead of" -q ; echo $?)
+            git_behind=$(  echo "${upstream}" | command grep "behind"   -q ; echo $?)
+            git_diverged=$(echo "${upstream}" | command grep "diverged" -q ; echo $?)
+        else
+            git_ahead="1"
+            git_behind="1"
+            git_diverged="1"
+        fi
+        git_untrack=$( echo "${status}" | command grep "ntrack"          -q ; echo $?)
+        git_staged=$(  echo "${status}" | command grep "to be committed" -q ; echo $?)
+        git_stashed=1
+        if command git status >/dev/null 2>&1 && [ "$(git stash list | wc -l)" -ne 0 ]
+        then
+            git_stashed=0
+        fi
+        if (( git_ahead == 0 ))
+        then
+            echo -n "^"
+        fi
+        if (( git_behind == 0 ))
+        then
+            echo -n "v"
+        fi
+        if (( git_diverged == 0 ))
+        then
+            echo -n "^v"
+        fi
+        if (( git_untrack == 0 ))
+        then
+            echo -n "+"
+        fi
+        if (( git_staged == 0 ))
+        then
+            echo -n "_"
+        fi
+        if (( git_stashed == 0 ))
+        then
+            echo -n "S"
+        fi
+    fi
+}
+
+gitLocalStatus() {
+    # Show the local status of the git repo passed as $1
+    if ! cd "${1}" 2> /dev/null
+    then
+        echo "'${1}' is not a valid directory [gitLocalStatus()]" > /dev/stderr
+    else
+        if ! git diff > /dev/null 2> /dev/null
+        then
+            return 0
+        fi
+        changecount=$(git diff --numstat --pretty="%H" | awk 'NF==3 {plus+=$1; minus+=$2} END {printf("+%d-%d\n", plus, minus)}')
+        if ! [ "${changecount}" == "+0-0" ]
+        then
+            echo -n "${changecount}"
+        fi
+    fi
+}
+
+isGitDir() {
+    # accepts a directory name, and returns a "true" or "false" indicating
+    # if the directory is a git repository.
+    #
+    # Decided it's not the job of this function to tell you whether the
+    # directory exists or not: only that the directory is, or is not, a git
+    # repository.  And if it doesn't exist, hey, it's not a git repo.
+
+    testDir="${1}"
+    if ! cd "${testDir}" 2> /dev/null
+    then
+        echo "false"  # unable to cd into the directory
+    elif ! [ -d ".git" ]
+    then
+        echo "false"  # dir exists, no .git subdir
+        # NOTE: Raw git dirs fail here as they don't have this subfolder
+    else
+        echo "true"
+    fi
+}
+
+checkRepo() {
+    # Check a repository for local and (if requested) remote changes.
+    # Takes a repo folder as a parameter
+
+    #echo "DEBUG: entered checkRepo()"
+    #echo "DEBUG: param is '${1}'"
+    repo="${1}"
+    gst=""
+    glst=""
+    grst=""
+    if ! cd "${repo}"
+    then
+        echo "'${repo}' is not a valid directory [checkRepo()]" > /dev/stderr
+    else
+        if ${FETCH}
+        then
+            command git fetch 2> /dev/null > /dev/null
+        fi
+
+        # get the git branch name:
+        gbr="$(gitBranchName "${repo}")"
+        # get the git local status / changes:
+        glst="$(gitLocalStatus "${repo}")"
+        # get the git remote status / changes:
+        grst="$(gitRemoteStatus "${repo}")"
+
+        # pretty up the change reports:
+        if [ -n "${glst}" ]
+        then
+            glst="${HIGHLIGHT1}l:${NOCOLOUR}${CHANGES}${glst}${NOCOLOUR}"
+        fi
+        if [ -n "${grst}" ]
+        then
+            grst="${HIGHLIGHT1}r:${NOCOLOUR}${CHANGES}${grst}${NOCOLOUR}"
+        fi
+
+        # Assemble the two:
+        gst="${glst}"
+        if [ -n "${gst}" ] && [ -n "${grst}" ]
+        then
+            gst="${gst} ${grst}"
+        elif [ -n "${grst}" ]
+        then
+            gst="${grst}"
+        fi
+        # And display it:
+        if [ -n "${gst}" ]
+        then
+            displayDir="${repo/${HOME}/~}"
+            echo "${displayDir%/}:${gbr} ${gst}"
+        fi
+    fi
+}
+
+showRepoCount() {
+    # shows a count of all repositories to be checked.  Assumes repos[] is
+    # a global variable.
+    i=0
+    # shellcheck disable=SC2068  # we WANT this array expansion to re-split
+    # shellcheck disable=SC2154  # var referenced but not assigned
+    for repo in ${!repos[@]}
+    do
+        if [ "${repos[${repo}]}" = "c" ]
+        then
+            (( i = i + 1 ))
+        fi
+    done
+    echo "There are ${i} repositories to check."
+}
+
+checkRepos() {
+    #echo "DEBUG: entered checkRepos()"
+    #echo "DEBUG: repos is ${!repos[*]}"
+    # list the "c" class repos
+
+    # PREAMBLE
+    echo "Loaded SSH keys:" ; ssh-add -l
+    tagExplanation top
+    showRepoCount
+
+    # shellcheck disable=SC2068  # we WANT this array expansion to re-split
+    # shellcheck disable=SC2154  # var referenced but not assigned
+    for repo in ${!repos[@]}
+    do
+        #echo "DEBUG: repo is ${repo}"
+        if [ "${repos[${repo}]}" = "c" ]
+        then
+            checkRepo "${repo}"
+        fi
+    done
+
+    # POSTAMBLE
+    tagExplanation bottom
+}
+
+CONFHEADER="
+
+declare -A repos
+
+# This line is sourced as Bash code / configuration by '${0}'
+#
+# Lines starting with '#' are ignored.
+#
+# Each line should consist of a valid git repository directory followed by
+# a single letter setting:
+#   i - ignore
+#   c - check
+#
+"
+
+searchForGitDirs() {
+    # search for git repos starting at $1,
+    # outputs a text list of repos discovered.
+    # also respects DONTCROSSFS var.
+    if [ -d "${1}" ]
+    then
+        dir="${1}"
+    else
+        echo "'${1}' is not a valid directory [searchForGitDirs()]" > /dev/stderr
+        return 1
+    fi
+
+    if ${DONTCROSSFS}
+    then
+        fsvar=" -xdev "
+    else
+        fsvar=" "
+    fi
+    # shellcheck disable=SC2086  # Double quote to prevent globbing ... we
+    # need fsvar unquoted (although I'm not sure why)
+    while read -r repo
+    do
+        echo "${repo}"
+    done < <( find "${dir}" ${fsvar} -type d -name '.git' | sed -e 's@/.git$@@' )
+}
+
+generateNewConfig() {
+    # create a new config file for the program from discovered repositories
+    # starting at $1.
+
+    base="${1}"
+    if ! [ -d "${base}" ]
+    then
+        echo "'${base}' is not a valid directory [generateNewConfig()]" > /dev/stderr
+    else
+        echo "${CONFHEADER}"
+        while read -r repo
+        do
+            echo 'repos["'"${repo}"'"]=i'
+        done < <( searchForGitDirs "${base}" )
+        echo
+    fi
+}
+
+checkConfigContents() {
+    # given a folder name ($1), generate a list of git repos under it and
+    # diff it with the list of git repos in the existing configuration
+    # file.
+
+    # tempfile to store old and new repos in before sorting:
+    tmpfile=$(mktemp "/tmp/$(basename "${0}")_XXXXXXXX") || exit 2
+    # start-point for search:
+    base="${1}"
+    if ! [ -d "${base}" ]
+    then
+        echo "'${1}' is not a valid directory [gitBranchName()]" > /dev/stderr
+        return 1
+    fi
+    # dump all discovered repos in the tempfile:
+    searchForGitDirs "${base}" >> "${tmpfile}"
+    # dump a list of all existing repos into the same tempfile:
+    # shellcheck disable=SC2154  # var referenced but not assigned
+    for repo in "${!repos[@]}"
+    do
+        # strip the trailing slash off dir names:
+        echo "${repo%/}" >> "${tmpfile}"
+    done
+    # Look at the results:
+    echo "Unique repos found (ie. new OR no-longer-existing):"
+    sort "${tmpfile}" | uniq -u
+    rm "${tmpfile}"
+}
+
+checkConfigAge() {
+    # Looks at global var $CONF file and determines if it's too old.
+    fileAgeInSeconds=$(( $(date +%s) - $(date -r "${CONF}" +%s) ))
+    fileAgeInDays=$(( fileAgeInSeconds / 60 / 60 / 24 ))
+    #echo "DEBUG: in checkConfigAge().  \$fileAgeInSeconds is '$fileAgeInSeconds', \$fileAgeInDays' is '$fileAgeInDays', and \$CONFDAYS is '${CONFDAYS}'."
+    if (( fileAgeInDays >= CONFDAYS ))
+    then
+        echo "Config file '${CONF}' is ${YELLOW}${fileAgeInDays} days old${NOCOLOUR}."
+        echo "Regenerate it with '${EXENAME} [-x] -s <folder-name>'"
+        echo
+    fi
+}
+
+confirmRepos() {
+    for repo in "${!repos[@]}"
+    do
+        # shellcheck disable=SC2091  #  Remove surrounding $() to avoid executing
+        # ... but that's what we want to do, more or less.  isGitDir()
+        # returns "true"/"false":
+        if ! $(isGitDir "${repo}")
+        then
+            echo "DEAD: ${repo}"
+        fi
+    done
+}
+
